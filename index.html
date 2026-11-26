@@ -1,0 +1,538 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+    <meta name="color-scheme" content="light dark" />
+    <link rel="icon" href="data:," />
+    <title>ボールランゲーム</title>
+    <style>
+      button, [role="button"] { min-height: 2.75rem; }
+      * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+      :root{
+        --bg:#eaf6ff; --panel:#ffffff; --ink:#14232e; --muted:#5b7183;
+        --accent:#e8442e; --accent-dark:#c93322; --gold:#f5a623;
+        --line:#d7e6ef; --shadow:0 10px 30px rgba(20,50,80,.14);
+      }
+      @media (prefers-color-scheme: dark){
+        :root{
+          --bg:#0d1b26; --panel:#16282f; --ink:#eef6fa; --muted:#9db4c2;
+          --accent:#ff5a3c; --accent-dark:#e8442e; --gold:#ffb52e;
+          --line:#2a414d; --shadow:0 10px 30px rgba(0,0,0,.45);
+        }
+      }
+      html,body{ height:100%; }
+      body{
+        margin:0; background:var(--bg); color:var(--ink);
+        font-family:"Hiragino Maru Gothic ProN","Hiragino Sans","Yu Gothic UI","Noto Sans JP",system-ui,sans-serif;
+        display:flex; flex-direction:column; align-items:center;
+        padding:14px 12px calc(16px + env(safe-area-inset-bottom));
+        overscroll-behavior:none;
+      }
+      .wrap{ width:100%; max-width:560px; display:flex; flex-direction:column; gap:12px; }
+
+      /* Scoreboard */
+      .hud{
+        display:flex; gap:10px;
+      }
+      .stat{
+        flex:1; background:var(--panel); border:1px solid var(--line);
+        border-radius:14px; padding:10px 14px; box-shadow:var(--shadow);
+      }
+      .stat .label{ font-size:.72rem; font-weight:700; letter-spacing:.08em; color:var(--muted); }
+      .stat .value{ font-size:1.7rem; font-weight:800; line-height:1.15; font-variant-numeric:tabular-nums; }
+      .stat .value small{ font-size:.85rem; font-weight:700; color:var(--muted); }
+      .stat.best .value{ color:var(--gold); }
+
+      /* Game stage */
+      .stage{
+        position:relative; border-radius:20px; overflow:hidden;
+        box-shadow:var(--shadow); border:1px solid var(--line);
+        touch-action:none; user-select:none; -webkit-user-select:none;
+        background:#8fd3f4;
+      }
+      canvas{ display:block; width:100%; height:auto; }
+
+      /* Overlay (start / game over) */
+      .overlay{
+        position:absolute; inset:0; display:flex; flex-direction:column;
+        align-items:center; justify-content:center; gap:10px; text-align:center;
+        background:rgba(10,25,38,.45); color:#fff; padding:20px;
+      }
+      .overlay[hidden]{ display:none; }
+      .overlay h1{ margin:0; font-size:1.9rem; font-weight:900; letter-spacing:.02em; text-shadow:0 2px 10px rgba(0,0,0,.35); }
+      .overlay p{ margin:0; font-size:.95rem; line-height:1.6; opacity:.95; }
+      .overlay .final{ font-size:1.15rem; font-weight:800; }
+      .overlay .newbest{
+        background:var(--gold); color:#3a2700; font-weight:800; font-size:.85rem;
+        padding:4px 14px; border-radius:999px;
+      }
+      .btn{
+        appearance:none; border:none; cursor:pointer;
+        background:var(--accent); color:#fff; font:inherit; font-weight:800; font-size:1.1rem;
+        padding:12px 34px; border-radius:999px; box-shadow:0 6px 0 var(--accent-dark);
+        transition:transform .06s ease, box-shadow .06s ease;
+      }
+      .btn:active{ transform:translateY(4px); box-shadow:0 2px 0 var(--accent-dark); }
+
+      /* Controls row */
+      .controls{ display:flex; gap:10px; align-items:stretch; }
+      .jump-btn{
+        flex:1; appearance:none; border:none; cursor:pointer;
+        background:var(--accent); color:#fff; font:inherit; font-weight:900; font-size:1.25rem;
+        border-radius:16px; padding:16px; box-shadow:0 6px 0 var(--accent-dark);
+        touch-action:none; user-select:none; -webkit-user-select:none;
+      }
+      .jump-btn:active{ transform:translateY(4px); box-shadow:0 2px 0 var(--accent-dark); }
+      .pause-btn{
+        appearance:none; cursor:pointer; width:64px;
+        background:var(--panel); color:var(--ink); border:1px solid var(--line);
+        border-radius:16px; font:inherit; font-weight:800; font-size:1rem;
+        box-shadow:var(--shadow);
+      }
+      .howto{
+        margin:0; text-align:center; color:var(--muted); font-size:.85rem; line-height:1.7;
+      }
+      .howto b{ color:var(--ink); }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="hud" aria-live="polite">
+        <div class="stat">
+          <div class="label">スコア</div>
+          <div class="value"><span id="score">0</span><small> m</small></div>
+        </div>
+        <div class="stat">
+          <div class="label">コイン</div>
+          <div class="value"><span id="coins">0</span><small> 枚</small></div>
+        </div>
+        <div class="stat best">
+          <div class="label">ベスト</div>
+          <div class="value"><span id="best">0</span><small> m</small></div>
+        </div>
+      </div>
+
+      <div class="stage" id="stage">
+        <canvas id="game" width="1120" height="640" aria-label="ボールランゲームの画面"></canvas>
+        <div class="overlay" id="overlay">
+          <h1 id="ovTitle">ボールラン</h1>
+          <p id="ovText">ボールが自動で転がっていくよ。<br>タップでジャンプして障害物をよけよう！</p>
+          <div class="newbest" id="ovBest" hidden>★ ベスト更新！</div>
+          <div class="final" id="ovFinal" hidden></div>
+          <button class="btn" id="startBtn" type="button">スタート</button>
+        </div>
+      </div>
+
+      <div class="controls">
+        <button class="jump-btn" id="jumpBtn" type="button">ジャンプ！</button>
+        <button class="pause-btn" id="pauseBtn" type="button" aria-label="一時停止">⏸</button>
+      </div>
+
+      <p class="howto">
+        遊び方：<b>画面タップ</b>か<b>ジャンプボタン</b>で跳ぶ（空中でもう一度タップで<b>2段ジャンプ</b>）。<br>
+        岩とトゲをよけて、コインを集めよう。進むほど速くなるよ。
+      </p>
+    </div>
+
+    <script>
+      (function () {
+        var canvas = document.getElementById('game');
+        var ctx = canvas.getContext('2d');
+        var W = canvas.width, H = canvas.height;
+        var GROUND = H - 96; // ground surface y
+
+        var scoreEl = document.getElementById('score');
+        var coinsEl = document.getElementById('coins');
+        var bestEl = document.getElementById('best');
+        var overlay = document.getElementById('overlay');
+        var ovTitle = document.getElementById('ovTitle');
+        var ovText = document.getElementById('ovText');
+        var ovFinal = document.getElementById('ovFinal');
+        var ovBest = document.getElementById('ovBest');
+        var startBtn = document.getElementById('startBtn');
+        var jumpBtn = document.getElementById('jumpBtn');
+        var pauseBtn = document.getElementById('pauseBtn');
+        var stage = document.getElementById('stage');
+
+        var dark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+
+        // ---- Game state ----
+        var state = 'ready'; // ready | playing | paused | over
+        var ball, obstacles, coinsArr, particles, clouds, hills;
+        var distance, coinCount, speed, spawnTimer, coinTimer, time, best = 0, shake;
+
+        var GRAV = 2600, JUMP_V = 980, JUMP2_V = 880;
+
+        function reset() {
+          ball = { x: 190, y: GROUND - 34, r: 34, vy: 0, rot: 0, jumps: 0 };
+          obstacles = [];
+          coinsArr = [];
+          particles = [];
+          distance = 0; coinCount = 0; speed = 430;
+          spawnTimer = 1.1; coinTimer = 0.7; time = 0; shake = 0;
+          clouds = [];
+          for (var i = 0; i < 6; i++) clouds.push({ x: Math.random() * W, y: 30 + Math.random() * 130, s: 0.6 + Math.random() * 0.9 });
+          hills = [];
+          for (var j = 0; j < 8; j++) hills.push({ x: j * 220, w: 220 + Math.random() * 120, h: 60 + Math.random() * 70 });
+          updateHud();
+        }
+
+        function updateHud() {
+          scoreEl.textContent = Math.floor(distance);
+          coinsEl.textContent = coinCount;
+          bestEl.textContent = Math.floor(best);
+        }
+
+        function jump() {
+          if (state === 'ready' || state === 'over') return;
+          if (state === 'paused') { togglePause(); return; }
+          if (ball.jumps < 2) {
+            ball.vy = -(ball.jumps === 0 ? JUMP_V : JUMP2_V);
+            ball.jumps++;
+            puff(ball.x, ball.y + ball.r, 5);
+          }
+        }
+
+        function startGame() {
+          reset();
+          state = 'playing';
+          overlay.hidden = true;
+          pauseBtn.textContent = '⏸';
+        }
+
+        function gameOver() {
+          state = 'over';
+          shake = 14;
+          burst(ball.x, ball.y, 26);
+          var isBest = distance > best;
+          if (isBest) best = distance;
+          updateHud();
+          ovTitle.textContent = 'ゲームオーバー';
+          ovText.innerHTML = '障害物にぶつかっちゃった…';
+          ovFinal.hidden = false;
+          ovFinal.textContent = '記録： ' + Math.floor(distance) + ' m ／ コイン ' + coinCount + ' 枚';
+          ovBest.hidden = !isBest;
+          startBtn.textContent = 'もう一度走る';
+          setTimeout(function () { overlay.hidden = false; }, 450);
+        }
+
+        function togglePause() {
+          if (state === 'playing') {
+            state = 'paused';
+            pauseBtn.textContent = '▶';
+            ovTitle.textContent = '一時停止中';
+            ovText.innerHTML = 'タップかボタンで再開できるよ。';
+            ovFinal.hidden = true; ovBest.hidden = true;
+            startBtn.textContent = 'つづける';
+            overlay.hidden = false;
+          } else if (state === 'paused') {
+            state = 'playing';
+            pauseBtn.textContent = '⏸';
+            overlay.hidden = true;
+          }
+        }
+
+        // ---- Spawning ----
+        function spawnObstacle() {
+          var kind = Math.random() < 0.5 ? 'rock' : 'spike';
+          if (kind === 'rock') {
+            var s = 44 + Math.random() * 26;
+            obstacles.push({ kind: kind, x: W + 60, w: s, h: s * 0.92, y: GROUND });
+          } else {
+            var n = Math.random() < 0.4 ? 2 : 1;
+            obstacles.push({ kind: kind, x: W + 60, w: 34 * n, h: 46, y: GROUND, n: n });
+          }
+          // gap shrinks slightly as speed grows, but always jumpable
+          spawnTimer = (560 + Math.random() * 620) / speed;
+        }
+
+        function spawnCoins() {
+          var n = 3 + Math.floor(Math.random() * 3);
+          var high = Math.random() < 0.45;
+          var baseY = high ? GROUND - 190 : GROUND - 78;
+          for (var i = 0; i < n; i++) {
+            coinsArr.push({ x: W + 60 + i * 56, y: baseY - Math.sin(i / (n - 1 || 1) * Math.PI) * 26, r: 17, taken: false, ph: Math.random() * 6 });
+          }
+          coinTimer = 1.6 + Math.random() * 2.4;
+        }
+
+        // ---- Particles ----
+        function puff(x, y, n) {
+          for (var i = 0; i < n; i++)
+            particles.push({ x: x + (Math.random() - 0.5) * 30, y: y, vx: -60 - Math.random() * 90, vy: -Math.random() * 60, life: 0.35, t: 0, r: 4 + Math.random() * 5, col: 'smoke' });
+        }
+        function burst(x, y, n) {
+          for (var i = 0; i < n; i++) {
+            var a = Math.random() * Math.PI * 2, v = 120 + Math.random() * 320;
+            particles.push({ x: x, y: y, vx: Math.cos(a) * v, vy: Math.sin(a) * v - 120, life: 0.7, t: 0, r: 3 + Math.random() * 6, col: 'ball' });
+          }
+        }
+        function sparkle(x, y) {
+          for (var i = 0; i < 8; i++) {
+            var a = (i / 8) * Math.PI * 2;
+            particles.push({ x: x, y: y, vx: Math.cos(a) * 110, vy: Math.sin(a) * 110, life: 0.3, t: 0, r: 3.5, col: 'gold' });
+          }
+        }
+
+        // ---- Update ----
+        function update(dt) {
+          time += dt;
+          // background always drifts slowly for life, game moves only when playing
+          var move = state === 'playing' ? speed * dt : 0;
+
+          for (var i = 0; i < clouds.length; i++) {
+            clouds[i].x -= (state === 'playing' ? speed * 0.12 : 8) * dt;
+            if (clouds[i].x < -140) { clouds[i].x = W + 40; clouds[i].y = 30 + Math.random() * 130; }
+          }
+          for (var j = 0; j < hills.length; j++) {
+            hills[j].x -= move * 0.35;
+            if (hills[j].x + hills[j].w < 0) { hills[j].x = W + 10; hills[j].h = 60 + Math.random() * 70; }
+          }
+
+          if (state === 'playing') {
+            distance += speed * dt / 46; // px -> m-ish
+            speed = Math.min(430 + distance * 2.1, 980);
+
+            // ball physics
+            ball.vy += GRAV * dt;
+            ball.y += ball.vy * dt;
+            ball.rot += (speed / ball.r) * dt;
+            if (ball.y >= GROUND - ball.r) {
+              if (ball.vy > 500) puff(ball.x, GROUND, 4);
+              ball.y = GROUND - ball.r; ball.vy = 0; ball.jumps = 0;
+            }
+
+            // obstacles
+            spawnTimer -= dt;
+            if (spawnTimer <= 0) spawnObstacle();
+            for (var k = obstacles.length - 1; k >= 0; k--) {
+              var o = obstacles[k];
+              o.x -= move;
+              if (o.x + o.w < -80) { obstacles.splice(k, 1); continue; }
+              // circle vs rect (slightly forgiving hitbox)
+              var hw = o.w / 2 - 4, hh = o.h - 8;
+              var cx = o.x + o.w / 2, top = o.y - hh;
+              var nx = Math.max(cx - hw, Math.min(ball.x, cx + hw));
+              var ny = Math.max(top, Math.min(ball.y, o.y));
+              var dx = ball.x - nx, dy = ball.y - ny;
+              if (dx * dx + dy * dy < (ball.r - 5) * (ball.r - 5)) { gameOver(); break; }
+            }
+
+            // coins
+            coinTimer -= dt;
+            if (coinTimer <= 0) spawnCoins();
+            for (var m = coinsArr.length - 1; m >= 0; m--) {
+              var c = coinsArr[m];
+              c.x -= move;
+              if (c.x < -40) { coinsArr.splice(m, 1); continue; }
+              var ddx = ball.x - c.x, ddy = ball.y - c.y;
+              if (ddx * ddx + ddy * ddy < (ball.r + c.r) * (ball.r + c.r)) {
+                coinsArr.splice(m, 1); coinCount++; sparkle(c.x, c.y); updateHud();
+              }
+            }
+            updateHud();
+          }
+
+          // particles
+          for (var p = particles.length - 1; p >= 0; p--) {
+            var pt = particles[p];
+            pt.t += dt;
+            if (pt.t >= pt.life) { particles.splice(p, 1); continue; }
+            pt.x += pt.vx * dt; pt.y += pt.vy * dt;
+            if (pt.col !== 'smoke') pt.vy += 500 * dt;
+          }
+          if (shake > 0) shake = Math.max(0, shake - dt * 30);
+        }
+
+        // ---- Draw ----
+        function draw() {
+          ctx.save();
+          if (shake > 0) ctx.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake);
+
+          // sky
+          var sky = ctx.createLinearGradient(0, 0, 0, H);
+          if (dark) { sky.addColorStop(0, '#12314d'); sky.addColorStop(1, '#3d6a8a'); }
+          else { sky.addColorStop(0, '#6ec6f5'); sky.addColorStop(1, '#cdeffd'); }
+          ctx.fillStyle = sky; ctx.fillRect(-20, -20, W + 40, H + 40);
+
+          // sun / moon
+          ctx.fillStyle = dark ? '#f4f1d8' : '#ffd94d';
+          ctx.beginPath(); ctx.arc(W - 120, 92, 40, 0, Math.PI * 2); ctx.fill();
+          if (!dark) { ctx.fillStyle = 'rgba(255,217,77,.35)'; ctx.beginPath(); ctx.arc(W - 120, 92, 58, 0, Math.PI * 2); ctx.fill(); }
+
+          // clouds
+          ctx.fillStyle = dark ? 'rgba(220,235,245,.55)' : 'rgba(255,255,255,.92)';
+          for (var i = 0; i < clouds.length; i++) {
+            var cl = clouds[i];
+            ctx.beginPath();
+            ctx.arc(cl.x, cl.y, 26 * cl.s, 0, Math.PI * 2);
+            ctx.arc(cl.x + 30 * cl.s, cl.y + 4 * cl.s, 20 * cl.s, 0, Math.PI * 2);
+            ctx.arc(cl.x - 30 * cl.s, cl.y + 6 * cl.s, 18 * cl.s, 0, Math.PI * 2);
+            ctx.fill();
+          }
+
+          // hills
+          ctx.fillStyle = dark ? '#2c5d46' : '#7cc47f';
+          for (var j = 0; j < hills.length; j++) {
+            var hl = hills[j];
+            ctx.beginPath();
+            ctx.moveTo(hl.x, GROUND);
+            ctx.quadraticCurveTo(hl.x + hl.w / 2, GROUND - hl.h * 2, hl.x + hl.w, GROUND);
+            ctx.closePath(); ctx.fill();
+          }
+
+          // ground
+          ctx.fillStyle = dark ? '#4a3626' : '#8a5a33';
+          ctx.fillRect(-20, GROUND, W + 40, H - GROUND + 20);
+          ctx.fillStyle = dark ? '#3f7d4e' : '#58b368';
+          ctx.fillRect(-20, GROUND, W + 40, 16);
+          // ground stripes scrolling
+          ctx.fillStyle = dark ? 'rgba(0,0,0,.18)' : 'rgba(0,0,0,.10)';
+          var off = -(distance * 46) % 90;
+          for (var gx = off; gx < W; gx += 90) ctx.fillRect(gx, GROUND + 34, 44, 10);
+
+          // coins
+          for (var m = 0; m < coinsArr.length; m++) {
+            var c = coinsArr[m];
+            var bob = Math.sin(time * 4 + c.ph) * 4;
+            var sq = Math.abs(Math.sin(time * 3 + c.ph)) * 0.55 + 0.45; // spin squash
+            ctx.save();
+            ctx.translate(c.x, c.y + bob);
+            ctx.scale(sq, 1);
+            ctx.fillStyle = '#f7b731';
+            ctx.beginPath(); ctx.arc(0, 0, c.r, 0, Math.PI * 2); ctx.fill();
+            ctx.fillStyle = '#ffd94d';
+            ctx.beginPath(); ctx.arc(0, 0, c.r - 5, 0, Math.PI * 2); ctx.fill();
+            ctx.fillStyle = '#d98e04';
+            ctx.font = 'bold 17px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+            ctx.fillText('★', 0, 1);
+            ctx.restore();
+          }
+
+          // obstacles
+          for (var k = 0; k < obstacles.length; k++) {
+            var o = obstacles[k];
+            if (o.kind === 'rock') {
+              ctx.fillStyle = dark ? '#8b98a3' : '#7d8a96';
+              ctx.beginPath();
+              ctx.moveTo(o.x, o.y);
+              ctx.lineTo(o.x + o.w * 0.12, o.y - o.h * 0.72);
+              ctx.lineTo(o.x + o.w * 0.45, o.y - o.h);
+              ctx.lineTo(o.x + o.w * 0.85, o.y - o.h * 0.8);
+              ctx.lineTo(o.x + o.w, o.y);
+              ctx.closePath(); ctx.fill();
+              ctx.fillStyle = 'rgba(255,255,255,.18)';
+              ctx.beginPath();
+              ctx.moveTo(o.x + o.w * 0.12, o.y - o.h * 0.72);
+              ctx.lineTo(o.x + o.w * 0.45, o.y - o.h);
+              ctx.lineTo(o.x + o.w * 0.5, o.y - o.h * 0.45);
+              ctx.lineTo(o.x + o.w * 0.22, o.y - o.h * 0.4);
+              ctx.closePath(); ctx.fill();
+            } else {
+              ctx.fillStyle = dark ? '#c7d2da' : '#aeb9c2';
+              for (var sIdx = 0; sIdx < o.n; sIdx++) {
+                var sx = o.x + sIdx * 34;
+                ctx.beginPath();
+                ctx.moveTo(sx, o.y);
+                ctx.lineTo(sx + 17, o.y - o.h);
+                ctx.lineTo(sx + 34, o.y);
+                ctx.closePath(); ctx.fill();
+              }
+              ctx.fillStyle = dark ? '#5b6b76' : '#8794a0';
+              ctx.fillRect(o.x - 3, o.y - 8, o.w + 6, 8);
+            }
+          }
+
+          // particles (behind ball for smoke, fine to draw all here)
+          for (var p = 0; p < particles.length; p++) {
+            var pt = particles[p];
+            var a = 1 - pt.t / pt.life;
+            if (pt.col === 'smoke') ctx.fillStyle = 'rgba(255,255,255,' + (a * 0.7) + ')';
+            else if (pt.col === 'gold') ctx.fillStyle = 'rgba(247,183,49,' + a + ')';
+            else ctx.fillStyle = 'rgba(232,68,46,' + a + ')';
+            ctx.beginPath(); ctx.arc(pt.x, pt.y, pt.r, 0, Math.PI * 2); ctx.fill();
+          }
+
+          // ball with rotating stripes
+          ctx.save();
+          ctx.translate(ball.x, ball.y);
+          // shadow
+          ctx.restore();
+          var shScale = Math.max(0.35, 1 - (GROUND - ball.r - ball.y) / 420);
+          ctx.fillStyle = 'rgba(0,0,0,.22)';
+          ctx.beginPath();
+          ctx.ellipse(ball.x, GROUND + 10, ball.r * shScale, 8 * shScale, 0, 0, Math.PI * 2);
+          ctx.fill();
+
+          ctx.save();
+          ctx.translate(ball.x, ball.y);
+          ctx.rotate(ball.rot);
+          ctx.fillStyle = '#e8442e';
+          ctx.beginPath(); ctx.arc(0, 0, ball.r, 0, Math.PI * 2); ctx.fill();
+          ctx.fillStyle = '#ffffff';
+          ctx.beginPath();
+          ctx.arc(0, 0, ball.r, -0.5, 0.5); ctx.lineTo(0, 0); ctx.closePath(); ctx.fill();
+          ctx.beginPath();
+          ctx.arc(0, 0, ball.r, Math.PI - 0.5, Math.PI + 0.5); ctx.lineTo(0, 0); ctx.closePath(); ctx.fill();
+          ctx.fillStyle = '#ffffff';
+          ctx.beginPath(); ctx.arc(0, 0, ball.r * 0.34, 0, Math.PI * 2); ctx.fill();
+          ctx.fillStyle = '#e8442e';
+          ctx.beginPath(); ctx.arc(0, 0, ball.r * 0.2, 0, Math.PI * 2); ctx.fill();
+          ctx.restore();
+          // shine (not rotating)
+          ctx.fillStyle = 'rgba(255,255,255,.5)';
+          ctx.beginPath(); ctx.arc(ball.x - 11, ball.y - 13, 8, 0, Math.PI * 2); ctx.fill();
+
+          ctx.restore();
+        }
+
+        // ---- Loop ----
+        var last = null;
+        function frame(ts) {
+          if (last === null) last = ts;
+          var dt = Math.min((ts - last) / 1000, 0.033);
+          last = ts;
+          if (state !== 'paused') update(dt);
+          draw();
+          requestAnimationFrame(frame);
+        }
+
+        // ---- Input ----
+        function pressJump(e) {
+          if (e) e.preventDefault();
+          jump();
+        }
+        stage.addEventListener('pointerdown', function (e) {
+          if (e.target.closest('.overlay')) return;
+          pressJump(e);
+        });
+        jumpBtn.addEventListener('pointerdown', pressJump);
+        document.addEventListener('keydown', function (e) {
+          if (e.code === 'Space' || e.code === 'ArrowUp') {
+            e.preventDefault();
+            if (state === 'ready' || state === 'over') {
+              if (overlay.hidden) jump();
+            } else jump();
+          }
+          if (e.code === 'KeyP' || e.code === 'Escape') {
+            if (state === 'playing' || state === 'paused') togglePause();
+          }
+        });
+        startBtn.addEventListener('click', function () {
+          if (state === 'paused') togglePause();
+          else startGame();
+        });
+        pauseBtn.addEventListener('click', function () {
+          if (state === 'playing' || state === 'paused') togglePause();
+        });
+        document.addEventListener('visibilitychange', function () {
+          if (document.hidden && state === 'playing') togglePause();
+        });
+
+        reset();
+        requestAnimationFrame(frame);
+      })();
+    </script>
+  </body>
+</html>
